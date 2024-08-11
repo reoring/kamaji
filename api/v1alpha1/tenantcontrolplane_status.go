@@ -154,6 +154,8 @@ type AddonsStatus struct {
 
 // TenantControlPlaneStatus defines the observed state of TenantControlPlane.
 type TenantControlPlaneStatus struct {
+	// Conditions represent the latest available observations of an object's state
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 	// Storage Status contains information about Kubernetes storage system
 	Storage StorageStatus `json:"storage,omitempty"`
 	// Certificates contains information about the different certificates
