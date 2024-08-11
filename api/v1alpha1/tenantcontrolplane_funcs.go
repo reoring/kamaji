@@ -70,3 +70,35 @@ func (in *TenantControlPlane) DeclaredControlPlaneAddress(ctx context.Context, c
 
 	return "", kamajierrors.MissingValidIPError{}
 }
+
+// SetCondition sets a condition on the TenantControlPlane status
+func (in *TenantControlPlane) SetCondition(conditionType string, status metav1.ConditionStatus, reason, message string) {
+	condition := metav1.Condition{
+		Type:               conditionType,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		LastTransitionTime: metav1.Now(),
+	}
+
+	for i, c := range in.Status.Conditions {
+		if c.Type == conditionType {
+			if c.Status != status {
+				in.Status.Conditions[i] = condition
+			}
+			return
+		}
+	}
+
+	in.Status.Conditions = append(in.Status.Conditions, condition)
+}
+
+// GetCondition returns the condition with the given type, if it exists
+func (in *TenantControlPlane) GetCondition(conditionType string) *metav1.Condition {
+	for _, c := range in.Status.Conditions {
+		if c.Type == conditionType {
+			return &c
+		}
+	}
+	return nil
+}

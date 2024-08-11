@@ -92,6 +92,11 @@ func (r *TenantControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.R
 	if err != nil {
 		log.Error(err, "cannot retrieve the required resource")
 
+		tenantControlPlane.SetCondition("Ready", metav1.ConditionFalse, "RetrievalFailed", "Failed to retrieve TenantControlPlane resource")
+		if updateErr := r.Client.Status().Update(ctx, tenantControlPlane); updateErr != nil {
+			log.Error(updateErr, "failed to update TenantControlPlane status")
+		}
+
 		return reconcile.Result{}, err
 	}
 
@@ -180,10 +185,20 @@ func (r *TenantControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.R
 			if kamajierrors.ShouldReconcileErrorBeIgnored(err) {
 				log.V(1).Info("sentinel error, enqueuing back request", "error", err.Error())
 
+				tenantControlPlane.SetCondition("Ready", metav1.ConditionFalse, "ReconciliationPending", "Reconciliation temporarily failed, will retry")
+				if updateErr := r.Client.Status().Update(ctx, tenantControlPlane); updateErr != nil {
+					log.Error(updateErr, "failed to update TenantControlPlane status")
+				}
+
 				return ctrl.Result{Requeue: true}, nil
 			}
 
 			log.Error(err, "handling of resource failed", "resource", resource.GetName())
+
+			tenantControlPlane.SetCondition("Ready", metav1.ConditionFalse, "ReconciliationFailed", fmt.Sprintf("Failed to reconcile resource: %s", resource.GetName()))
+			if updateErr := r.Client.Status().Update(ctx, tenantControlPlane); updateErr != nil {
+				log.Error(updateErr, "failed to update TenantControlPlane status")
+			}
 
 			return ctrl.Result{}, err
 		}
@@ -208,6 +223,14 @@ func (r *TenantControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.R
 	}
 
 	log.Info(fmt.Sprintf("%s has been reconciled", tenantControlPlane.GetName()))
+
+	// Set the Ready condition
+	tenantControlPlane.SetCondition("Ready", metav1.ConditionTrue, "Reconciled", "TenantControlPlane is ready")
+
+	if err := r.Client.Status().Update(ctx, tenantControlPlane); err != nil {
+		log.Error(err, "failed to update TenantControlPlane status")
+		return ctrl.Result{}, err
+	}
 
 	return ctrl.Result{}, nil
 }
