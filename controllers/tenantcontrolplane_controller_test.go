@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -27,20 +28,42 @@ import (
 func mockReconcile(r *controllers.TenantControlPlaneReconciler, ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	tcp := &kamajiv1alpha1.TenantControlPlane{}
 	if err := r.Client.Get(ctx, req.NamespacedName, tcp); err != nil {
+		if errors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
 		return ctrl.Result{}, fmt.Errorf("failed to get TenantControlPlane: %w", err)
+	}
+
+	ds := &kamajiv1alpha1.DataStore{}
+	if err := r.Client.Get(ctx, types.NamespacedName{Name: tcp.Spec.DataStore}, ds); err != nil {
+		if errors.IsNotFound(err) {
+			meta.SetStatusCondition(&tcp.Status.Conditions, metav1.Condition{
+				Type:               controllers.ConditionTypeReady,
+				Status:             metav1.ConditionFalse,
+				Reason:             controllers.ConditionReasonReconcileFailed,
+				Message:            "DataStore not found",
+				LastTransitionTime: metav1.Now(),
+			})
+			if updateErr := r.Client.Status().Update(ctx, tcp); updateErr != nil {
+				return ctrl.Result{}, fmt.Errorf("failed to update TenantControlPlane status: %w", updateErr)
+			}
+			return ctrl.Result{}, fmt.Errorf("failed to get DataStore: %w", err)
+		}
+		return ctrl.Result{}, fmt.Errorf("failed to get DataStore: %w", err)
 	}
 
 	// Set the Ready condition
 	meta.SetStatusCondition(&tcp.Status.Conditions, metav1.Condition{
-		Type:    "Ready",
-		Status:  metav1.ConditionTrue,
-		Reason:  "Reconciled",
-		Message: "TenantControlPlane is ready",
+		Type:               controllers.ConditionTypeReady,
+		Status:             metav1.ConditionTrue,
+		Reason:             controllers.ConditionReasonReconciled,
+		Message:            "TenantControlPlane is ready",
+		LastTransitionTime: metav1.Now(),
 	})
 
-	// Update the entire object
-	if err := r.Client.Update(ctx, tcp); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to update TenantControlPlane: %w", err)
+	// Update the status
+	if err := r.Client.Status().Update(ctx, tcp); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to update TenantControlPlane status: %w", err)
 	}
 
 	return ctrl.Result{}, nil
@@ -67,8 +90,11 @@ func TestTenantControlPlaneReconciler_Reconcile(t *testing.T) {
 	err := kamajiv1alpha1.AddToScheme(scheme.Scheme)
 	require.NoError(t, err)
 
-	// Create a fake client with the registered scheme
-	fakeClient := fake.NewClientBuilder().WithScheme(scheme.Scheme).Build()
+	// Create a fake client with the registered scheme and subresources enabled
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme.Scheme).
+		WithStatusSubresource(&kamajiv1alpha1.TenantControlPlane{}).
+		Build()
 
 	// Create a TenantControlPlaneReconciler instance
 	reconciler := &controllers.TenantControlPlaneReconciler{
@@ -116,12 +142,6 @@ func TestTenantControlPlaneReconciler_Reconcile(t *testing.T) {
 	err = fakeClient.Create(ctx, ds)
 	require.NoError(t, err, "Failed to create DataStore")
 
-	// Verify that the TenantControlPlane was created
-	createdTCP := &kamajiv1alpha1.TenantControlPlane{}
-	err = fakeClient.Get(ctx, types.NamespacedName{Name: "test-tcp", Namespace: "default"}, createdTCP)
-	require.NoError(t, err, "Failed to get created TenantControlPlane")
-	t.Logf("Created TenantControlPlane: %+v", createdTCP)
-
 	// Replace the wrapper functions with mocks
 	originalHandleResource := handleResource
 	originalUpdateStatus := updateStatus
@@ -132,48 +152,82 @@ func TestTenantControlPlaneReconciler_Reconcile(t *testing.T) {
 		updateStatus = originalUpdateStatus
 	}()
 
-	// Call Reconcile
-	req := ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      "test-tcp",
-			Namespace: "default",
-		},
-	}
+	t.Run("Successful Reconciliation", func(t *testing.T) {
+		req := ctrl.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      "test-tcp",
+				Namespace: "default",
+			},
+		}
 
-	// Check if the TenantControlPlane exists before Reconcile
-	beforeReconcileTCP := &kamajiv1alpha1.TenantControlPlane{}
-	err = fakeClient.Get(ctx, req.NamespacedName, beforeReconcileTCP)
-	require.NoError(t, err, "Failed to get TenantControlPlane before Reconcile")
-	t.Logf("TenantControlPlane before Reconcile: %+v", beforeReconcileTCP)
+		result, err := mockReconcile(reconciler, ctx, req)
+		require.NoError(t, err, "mockReconcile failed")
+		assert.Equal(t, ctrl.Result{}, result)
 
-	result, err := mockReconcile(reconciler, ctx, req)
-	require.NoError(t, err, "mockReconcile failed")
-	assert.Equal(t, ctrl.Result{}, result)
+		// Check if the TenantControlPlane has been updated with the Ready condition
+		var updatedTCP kamajiv1alpha1.TenantControlPlane
+		err = fakeClient.Get(ctx, req.NamespacedName, &updatedTCP)
+		require.NoError(t, err, "Failed to get updated TenantControlPlane")
 
-	// Check if the TenantControlPlane has been updated with the Ready condition
-	var updatedTCP kamajiv1alpha1.TenantControlPlane
-	err = fakeClient.Get(ctx, req.NamespacedName, &updatedTCP)
-	require.NoError(t, err, "Failed to get updated TenantControlPlane")
+		readyCondition := meta.FindStatusCondition(updatedTCP.Status.Conditions, controllers.ConditionTypeReady)
+		require.NotNil(t, readyCondition, "Ready condition not found")
+		assert.Equal(t, metav1.ConditionTrue, readyCondition.Status)
+		assert.Equal(t, controllers.ConditionReasonReconciled, readyCondition.Reason)
+		assert.Equal(t, "TenantControlPlane is ready", readyCondition.Message)
+	})
 
-	t.Logf("Updated TenantControlPlane: %+v", updatedTCP)
-	t.Logf("Updated TenantControlPlane Status: %+v", updatedTCP.Status)
-	t.Logf("Updated TenantControlPlane Conditions: %+v", updatedTCP.Status.Conditions)
+	t.Run("TenantControlPlane Not Found", func(t *testing.T) {
+		req := ctrl.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      "non-existent-tcp",
+				Namespace: "default",
+			},
+		}
 
-	readyCondition := meta.FindStatusCondition(updatedTCP.Status.Conditions, "Ready")
-	require.NotNil(t, readyCondition, "Ready condition not found")
-	assert.Equal(t, metav1.ConditionTrue, readyCondition.Status)
-	assert.Equal(t, "Reconciled", readyCondition.Reason)
-	assert.Equal(t, "TenantControlPlane is ready", readyCondition.Message)
+		result, err := mockReconcile(reconciler, ctx, req)
+		assert.NoError(t, err, "Expected no error for non-existent TenantControlPlane")
+		assert.Equal(t, ctrl.Result{}, result)
+	})
 
-	// Test the case when TenantControlPlane is not found
-	notFoundReq := ctrl.Request{
-		NamespacedName: types.NamespacedName{
-			Name:      "non-existent-tcp",
-			Namespace: "default",
-		},
-	}
+	t.Run("DataStore Not Found", func(t *testing.T) {
+		// Create a TenantControlPlane with a non-existent DataStore
+		tcpWithInvalidDS := &kamajiv1alpha1.TenantControlPlane{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "tcp-invalid-ds",
+				Namespace: "default",
+			},
+			Spec: kamajiv1alpha1.TenantControlPlaneSpec{
+				DataStore: "non-existent-datastore",
+			},
+		}
 
-	result, err = mockReconcile(reconciler, ctx, notFoundReq)
-	assert.Error(t, err, "Expected an error for non-existent TenantControlPlane")
-	assert.Equal(t, ctrl.Result{}, result)
+		err := fakeClient.Create(ctx, tcpWithInvalidDS)
+		require.NoError(t, err, "Failed to create TenantControlPlane with invalid DataStore")
+
+		req := ctrl.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      "tcp-invalid-ds",
+				Namespace: "default",
+			},
+		}
+
+		result, err := mockReconcile(reconciler, ctx, req)
+		assert.Error(t, err, "Expected an error due to non-existent DataStore")
+		assert.Equal(t, ctrl.Result{}, result)
+
+		// Check if the TenantControlPlane status has been updated to reflect the error
+		var updatedTCP kamajiv1alpha1.TenantControlPlane
+		err = fakeClient.Get(ctx, req.NamespacedName, &updatedTCP)
+		require.NoError(t, err, "Failed to get updated TenantControlPlane")
+
+		t.Logf("Updated TenantControlPlane: %+v", updatedTCP)
+		t.Logf("Updated TenantControlPlane Status: %+v", updatedTCP.Status)
+		t.Logf("Updated TenantControlPlane Conditions: %+v", updatedTCP.Status.Conditions)
+
+		readyCondition := meta.FindStatusCondition(updatedTCP.Status.Conditions, controllers.ConditionTypeReady)
+		require.NotNil(t, readyCondition, "Ready condition not found")
+		assert.Equal(t, metav1.ConditionFalse, readyCondition.Status)
+		assert.Equal(t, controllers.ConditionReasonReconcileFailed, readyCondition.Reason)
+		assert.Equal(t, "DataStore not found", readyCondition.Message)
+	})
 }
