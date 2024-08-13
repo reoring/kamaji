@@ -43,11 +43,11 @@ import (
 
 // Constants for condition types and reasons
 const (
-	ConditionTypeReady             = "Ready"
-	ConditionReasonRetrievalFailed = "RetrievalFailed"
+	ConditionTypeReady              = "Ready"
+	ConditionReasonRetrievalFailed  = "RetrievalFailed"
 	ConditionReasonReconcilePending = "ReconciliationPending"
-	ConditionReasonReconcileFailed = "ReconciliationFailed"
-	ConditionReasonReconciled      = "Reconciled"
+	ConditionReasonReconcileFailed  = "ReconciliationFailed"
+	ConditionReasonReconciled       = "Reconciled"
 )
 
 // TenantControlPlaneReconciler reconciles a TenantControlPlane object.

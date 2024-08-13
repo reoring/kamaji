@@ -140,9 +140,8 @@ func (r *APIServerCertificate) mutate(ctx context.Context, tenantControlPlane *k
 		}
 		certificateKeyPair, err := kubeadm.GenerateCertificatePrivateKeyPair(kubeadmconstants.APIServerCertAndKeyBaseName, config, ca)
 		if err != nil {
-			logger.Error(err, "cannot generate certificate and private key")
-
-			return err
+			logger.Error(err, "cannot generate certificate and private key in api server certificate", "details", err.Error())
+			return fmt.Errorf("failed to generate certificate and private key: %w", err)
 		}
 
 		r.resource.Data = map[string][]byte{

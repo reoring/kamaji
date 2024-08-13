@@ -36,7 +36,8 @@ IMAGE_TAG_BASE ?= clastix.io/operator
 BUNDLE_IMG ?= $(IMAGE_TAG_BASE)-bundle:v$(VERSION)
 
 # Image URL to use all building/pushing image targets
-IMG ?= clastix/kamaji:v$(VERSION)
+# IMG ?= clastix/kamaji:v$(VERSION)
+IMG ?= reoring/kamaji:v$(VERSION)
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -183,7 +184,7 @@ run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./main.go
 
 docker-build: ## Build docker image with the manager.
-	docker build -t ${IMG} . --build-arg GIT_HEAD_COMMIT=$(GIT_HEAD_COMMIT) \
+	docker build --platform linux/amd64 -t ${IMG} . --build-arg GIT_HEAD_COMMIT=$(GIT_HEAD_COMMIT) \
 		--build-arg GIT_TAG_COMMIT=$(GIT_TAG_COMMIT) \
 		--build-arg GIT_MODIFIED=$(GIT_MODIFIED) \
 		--build-arg GIT_REPO=$(GIT_REPO) \
