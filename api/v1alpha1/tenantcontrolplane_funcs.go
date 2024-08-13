@@ -66,6 +66,9 @@ func (in *TenantControlPlane) DeclaredControlPlaneAddress(ctx context.Context, c
 			if ip := lb.IP; len(ip) > 0 {
 				return ip, nil
 			}
+			if hostname := lb.Hostname; len(hostname) > 0 {
+				return hostname, nil
+			}
 		}
 	}
 
