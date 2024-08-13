@@ -67,7 +67,14 @@ func (in *TenantControlPlane) DeclaredControlPlaneAddress(ctx context.Context, c
 				return ip, nil
 			}
 			if hostname := lb.Hostname; len(hostname) > 0 {
-				return hostname, nil
+				// Resolve hostname to IP address
+				ips, err := net.LookupIP(hostname)
+				if err != nil {
+					return "", errors.Wrap(err, "cannot resolve LoadBalancer hostname to IP")
+				}
+				if len(ips) > 0 {
+					return ips[0].String(), nil
+				}
 			}
 		}
 	}
